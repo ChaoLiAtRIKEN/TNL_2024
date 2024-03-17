@@ -1,5 +1,4 @@
 import numpy as np
-import numpy as np
 np.random.seed(420)
 import jax.numpy as jnp
 import functools, itertools

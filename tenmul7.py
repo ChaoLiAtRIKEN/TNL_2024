@@ -2,7 +2,7 @@ import jax
 import opt_einsum
 import numpy as np
 import jax.numpy as jnp
-import functools
+import more_itertools, functools
 
 class NeuroTNHelper:
     ## The helper class for TensorNetwork,
@@ -406,8 +406,10 @@ class NeuroTN:
                 
                 return log_softmax_ce_loss + WD_loss
             
-            # the_loss = expr_with_softmax_loss
-            the_loss = expr_with_mse_loss
+            the_loss = expr_with_softmax_loss
+            print('The softmax loss is used')
+
+            # the_loss = expr_with_mse_loss
 
             self.jit_target_contraction_gradient = jax.jit(jax.grad(the_loss, argnums=[0, 1]))
             self.jit_target_contraction_value_gradient = jax.jit(jax.value_and_grad(the_loss, argnums=[0, 1]))
@@ -485,7 +487,10 @@ class NeuroTN:
         else:
             return None
     
-    def ntk(self, target, opt_path='dp'):
+    def ntk(self, target, opt_path='dp', batch_size = None):
+        if batch_size is None:
+            batch_size = target.shape[0] # full batch
+
         dim_output = jnp.prod(self.additional_output[self.additional_output != 0])
 
         def network_model(W, B, target):
@@ -493,10 +498,10 @@ class NeuroTN:
                 return self.einsum_target_expr(*cores)
         
         self.network_contraction(target, optimize=opt_path, return_contraction=False)
-        
+
         # jac_W, jac_B = jax.jit(jax.jacfwd(network_model, argnums=[0, 1]))(self.W, self.B, target)
         jac_W, jac_B = jax.jacrev(network_model, argnums=[0, 1])(self.W, self.B, target)
-        
+
         ntk_tensor = jnp.zeros((target.shape[0], target.shape[0]))
         
         @jax.jit
