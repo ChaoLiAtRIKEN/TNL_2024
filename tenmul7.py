@@ -488,8 +488,19 @@ class NeuroTN:
             return None
     
     def ntk(self, target, opt_path='dp', batch_size = None):
+        """
+        Compute the Neural Tangent Kernel (NTK) for the given target.
+
+        Parameters:
+        - target: Features, num_data x dim_features x dim_each_mode, e.g. 1000x748x2.
+        - opt_path: A string specifying the optimization path. Defaults to 'dp'.
+        - batch_size: An optional integer specifying the batch size. If None, it defaults to the target's batch size.
+
+        Returns:
+        - ntk_tensor: A jnp.ndarray representing the computed Neural Tangent Kernel, dim_output x num_data x num_data.
+        """
         if batch_size is None:
-            batch_size = target.shape[0] # full batch
+            batch_size = target.shape[0]
 
         dim_output = jnp.prod(self.additional_output[self.additional_output != 0])
 
@@ -499,21 +510,35 @@ class NeuroTN:
         
         self.network_contraction(target, optimize=opt_path, return_contraction=False)
 
-        # jac_W, jac_B = jax.jit(jax.jacfwd(network_model, argnums=[0, 1]))(self.W, self.B, target)
-        jac_W, jac_B = jax.jacrev(network_model, argnums=[0, 1])(self.W, self.B, target)
+        def jac_unfolding(tensor): # output x batch x parameters
+            return tensor.reshape(tensor.shape[0], dim_output, -1).swapaxes(0, 1)
+
+        for idx, x in enumerate(more_itertools.batched(target, batch_size)):
+            x = np.stack(x, axis=0)
+            jac_W_batch, jac_B_batch = jax.jacrev(network_model, argnums=[0, 1])(self.W, self.B, x)
+            jac_W_batch = [jac_unfolding(a) for a in jac_W_batch]
+            jac_B_batch = [jac_unfolding(a) for a in jac_B_batch]
+            if idx == 0:
+                jac_W = jac_W_batch
+            else:
+                jac_W = [jnp.concatenate((a,b), axis=1) for a, b in zip(jac_W, jac_W_batch)]
+
+            if idx == 0:
+                jac_B = jac_B_batch
+            else:
+                jac_B = [jnp.concatenate((a,b), axis=1) for a, b in zip(jac_B, jac_B_batch)]
+            
+            print('=======')
+            print('Idx', idx, jac_W[1].shape)
+            print('Idx', idx, jac_B[1].shape)
 
         ntk_tensor = jnp.zeros((target.shape[0], target.shape[0]))
-        
-        @jax.jit
-        def process_tensor(tensor):
-            tensor_plain = tensor.reshape(tensor.shape[0], dim_output, -1).swapaxes(0, 1)
-            return jnp.matmul(tensor_plain, tensor_plain.swapaxes(1, 2))
                 
         for w in jac_W:
-            ntk_tensor += process_tensor(w)
+            ntk_tensor += jnp.matmul(w, w.swapaxes(1, 2))
         
         if self.core_mode != 2:  # Mode 2 means no bias
             for b in jac_B:
-                ntk_tensor += process_tensor(b)
+                ntk_tensor += jnp.matmul(b, b.swapaxes(1, 2))
 
         return ntk_tensor
